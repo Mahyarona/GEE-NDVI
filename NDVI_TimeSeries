@@ -1,0 +1,231 @@
+print(ee.ImageCollection('COPERNICUS/S2_SR').size())
+
+// Available Images of Sentinel_SR for AOI
+var StartDate='2020-03-01';
+var EndDate='2020-05-01';
+var Sentinel_SR_AOI=ee.ImageCollection('COPERNICUS/S2_SR').filterDate(StartDate,EndDate).filterBounds(AOI1);
+print(Sentinel_SR_AOI)
+
+
+// Date of images
+function ConvertDates(input){
+  return ee.Feature(null,{'date': input.date().format('YYYY-MM-dd')})
+}
+var dates=Sentinel_SR_AOI.map(ConvertDates).distinct('date').aggregate_array('date')
+print(dates)
+
+// Mask Clouds
+/*
+function MaskClouds(input){
+  var cloudBand=input.select('QA60');
+  var cloudBitMask=1<<10;
+  var cirrusBitMask=1<<11;
+  var cloudMask=cloudBand.bitwiseAnd(cloudBitMask).eq(0).and(cloudBand.bitwiseAnd(cirrusBitMask).eq(0))
+  return input.updateMask(cloudMask)
+}
+
+var Sentinel_SR_AOI_CloudFree=Sentinel_SR_AOI.map(MaskClouds);
+print (Sentinel_SR_AOI_CloudFree)
+*/
+
+function CloudScore(input){
+  var CloudPerc=ee.Image(input).get('CLOUDY_PIXEL_PERCENTAGE')
+  return ee.Feature(null,{'CloudPercentage':CloudPerc})
+}
+
+var Sentinel_SR_AOI_CloudPercentage=Sentinel_SR_AOI.map(CloudScore);
+print(Sentinel_SR_AOI_CloudPercentage)
+//var Cloud_Chart=Chart.feature.byFeature(Sentinel_SR_AOI_CloudPercentage);
+var Cloud_Chart=ui.Chart.feature.byFeature(Sentinel_SR_AOI_CloudPercentage)
+
+print (Cloud_Chart)
+
+// Calculate NDVI for each Image {(1) Define NDVI function, (2) Apply function over Available Images}
+function addNDVI(input) {
+  var NDVI=input.normalizedDifference(['B8','B4']);
+  var InputwithNDVI=input.addBands(NDVI)
+  return InputwithNDVI
+}
+
+var Sentinel_SR_AOI_withNDVI= Sentinel_SR_AOI.map(addNDVI);
+print(Sentinel_SR_AOI_withNDVI)
+
+// Timeseries of mean NDVI 
+var NDVI_Chart= Chart.image.series(Sentinel_SR_AOI_withNDVI.select('nd'), AOI1, ee.Reducer.mean())
+.setOptions({
+  title: 'NDVI from Sentinel-SR for AOI',
+  hAxis: {title: 'Date'},
+  vAxis: {title: 'NDVI'},
+  
+})
+print(NDVI_Chart)
+
+// Show NDVI maps {Define VisParam, ExtractDates, ShowLayers with Date Labels}
+var visNDVIparam={min:0, max:1, palette: 'FFFFFF, CE7E45, DF923D, F1B555, FCD163, 99B718, 74A901, 66A000, 529400,' +
+    '3E8601, 207401, 056201, 004C00, 023B01, 012E01, 011D01, 011301'}
+Map.centerObject(AOI1,16)
+//Map.addLayer(Sentinel_SR_AOI_withNDVI.select('nd').first().clip(AOI1),visNDVIparam,'NDVI from Sentinel_SR for AOI')
+
+//var dates=Sentinel_SR_AOI.reduceColumns(ee.Reducer.toList(),["system:time_start"]).get('list')
+
+
+function ShowMap(input){
+  var id=input.id
+  var eeImage=ee.Image(input.id)
+  var NDVI=eeImage.normalizedDifference(['B8','B4']);
+  var date = ee.Date(eeImage.get('system:time_start')).format('YYYY-MM-DD');
+  date = date.getInfo();
+  Map.addLayer(NDVI.clip(AOI1),visNDVIparam,date);
+}
+
+/*
+function ShowMap2(input){
+  var id=input.id
+  var eeImage=ee.Image(input.id)
+  Map.addLayer(eeImage.clip(AOI1));
+}
+*/
+Sentinel_SR_AOI.evaluate(function(Sentinel_SR_AOI){
+Sentinel_SR_AOI.features.map(ShowMap)
+})
+
+
+// Export NDVI from Avialable Sentinel-SR for AOI 
+function exportGeotiff(input){
+  var id=input.id
+  var eeImage=ee.Image(input.id)
+  var NDVI=eeImage.normalizedDifference(['B8','B4']);
+  //var Desc= ee.String(ee.Image(input.id).get('GRANULE_ID'))
+  //print(Desc)
+  var date = ee.Date(eeImage.get('system:time_start')).format('YYYY-MM-DD');
+  date = date.getInfo();
+  Export.image.toDrive({
+  image:NDVI,
+  description:date,
+  scale: 10,
+  region: AOI1,
+})
+}
+
+Sentinel_SR_AOI.evaluate(function(Sentinel_SR_AOI){
+Sentinel_SR_AOI.features.map(exportGeotiff)
+})
+
+// Approach 1: Calculate NDVI of an image for each block (from Shapefile)
+/* Note: 
+Weighted reducers (e.g. ee.Reducer.mean()): pixels are included if at least (approximately) 0.5% of the pixel is in the region and the image's mask is non-zero; 
+their weight is the minimum of the image's mask and the (approximate) fraction of the pixel covered by the region
+*/
+Map.addLayer(table);
+
+var Sentinel_Image=ee.Image('COPERNICUS/S2_SR/20200320T184959_20200320T190131_T10SFH');
+var NDVI=Sentinel_Image.normalizedDifference(['B8','B4']);
+var Sentinel_Image_NDVI=Sentinel_Image.addBands(NDVI);
+
+function addNDVIProp (input){
+  var NDVI_perPol = Sentinel_Image_NDVI.reduceRegion({ reducer: ee.Reducer.mean(), geometry: input.geometry(), scale: 10});
+  return input.set({'Sentin_NDVI_pixelValue':NDVI_perPol.get('nd')});
+}
+var Shape_withNDVI = table.map(addNDVIProp);
+print(Shape_withNDVI);
+
+// Approach 2: Calculate NDVI of one block (from Shapefile) from ImageCollection 
+/* Error
+function addNDVIPropFromImageColl (input){
+  var NDVI_perPol = input.reduceRegion({ reducer: ee.Reducer.mean(), geometry: table.get(1).geometry(), scale: 10});
+  return table.get(1).set({'Sentin_NDVI_pixelValue':NDVI_perPol.get('nd')});
+}
+var Shape_withSeriesNDVI = Sentinel_SR_AOI_withNDVI.map(addNDVIProp);
+print(Shape_withSeriesNDVI);
+
+*/
+
+
+
+// Calculate number of cloudy pixels for each block
+function CloudPercperBlock (input){
+var CloudperBlock= Sentinel_Image.select('MSK_CLDPRB').reduceRegion({reducer: ee.Reducer.mean(), geometry:input.geometry(), scale:10});
+return input.set({'Cloudperc': CloudperBlock.get('MSK_CLDPRB')})
+}
+var Shape_withCloudpercNDVI = Shape_withNDVI.map(CloudPercperBlock);
+print(Shape_withCloudpercNDVI);
+
+
+// Filter out cloudy pixels in calculation
+/* Error
+var Sentinel_CloudFree= Sentinel_Image.updateMask(Sentinel_Image.select('MSK_CLDPRB').gt(0))
+
+var NDVI=Sentinel_CloudFree.normalizedDifference(['B8','B4'])
+var Sentinel_CloudFree_NDVI=Sentinel_CloudFree.addBands(NDVI)
+
+print(Sentinel_CloudFree_NDVI)
+
+function addNDVIProp (input){
+  var NDVI_perPol = Sentinel_CloudFree_NDVI.reduceRegion({ reducer: ee.Reducer.mean(), geometry: input.geometry(), scale: 10});
+  return input.set({'Sentin_NDVI_pixelValue2':NDVI_perPol.get('nd')});
+}
+var Shape_withNDVI_CloudFiltered = Shape_withCloudpercNDVI.map(addNDVIProp);
+print(Shape_withNDVI_CloudFiltered);
+*/
+
+
+
+// Customize Maps for Luis
+
+
+// Export Shapefile and CSV
+Export.table.toDrive({
+  collection: Shape_withCloudpercNDVI,
+  description: 'ShapeNDVIandCloud',
+  fileFormat: 'SHP'
+});
+
+
+Export.table.toDrive({
+  collection: Shape_withCloudpercNDVI,
+  description: 'ShapeNDVIandCloudCsv',
+  fileFormat: 'CSV'
+});
+
+
+
+// Think about applying .map over both FeatureCollection and ImageCollection
+//var image= Sentinel_SR_AOI.first();
+//print(ee.Image(image))
+var rgbVis = {
+  min: 0.0,
+  max: 0.3,
+  bands: ['B4', 'B3', 'B2'],
+};
+Map.addLayer(ee.Image('COPERNICUS/S2_SR/20200320T184959_20200320T190131_T10SFH').divide(10000),rgbVis,'Image')
+
+//COPERNICUS/S2_SR/20200305T185241_20200305T185610_T10SFH
+
+/*
+function NDVIShapefile (input) {
+  var NDVIBlock = input.reduceRegions(table, ee.Reducer.mean())
+  .filter(ee.Filter.notNull(['ndvi']));
+  return table.set({MeanNDVI: NDVIBlock});
+}
+
+var NDVIperBlock=Sentinel_SR_AOI_withNDVI.select('nd').map(NDVIShapefile)
+print(NDVIperBlock)
+print(table)
+*/
+
+
+// Learnt : How to Remove one Band from ImageCollection
+//function RemoveBands(input){
+//  return input.select(input.bandNames().filter(ee.Filter.stringStartsWith('item','nd')));
+//}
+
+//print(Sentinel_SR_AOI_withNDVI.first().bandNames().filter(ee.Filter.stringStartsWith('item','nd')))
+      
+//var Sentinel_SR_AOI_NDVI=Sentinel_SR_AOI_withNDVI.map(RemoveBands);
+//print(Sentinel_SR_AOI_NDVI)
+
+/*
+Ref: https://geohackweek.github.io/GoogleEarthEngine/03-load-imagery/
+     http://www.mdpi.com/2072-4292/10/11/1693/s1
+     */
+    
